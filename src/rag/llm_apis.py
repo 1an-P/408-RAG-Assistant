@@ -66,10 +66,32 @@ class LLMClient:
         """
         # 压缩上下文，提取关键信息
         compressed_context = self.compress_context(context, question)
+        
+        # 准备上下文
         context_str = "\n\n".join(compressed_context) if compressed_context else "\n\n".join(context)
         history_str = "\n".join([f"用户: {h[0]}\n助手: {h[1]}" for h in history]) if history else "无"
         
-        prompt = f"请根据以下提供的408考研相关知识回答问题，参考教材表述，突出核心概念和考试重点：\n\n{context_str}\n\n对话历史：\n{history_str}\n\n问题：{question}"
+        # 使用CoT提示词模板
+        prompt = f"""请根据以下提供的408考研相关知识回答问题，参考教材表述，突出核心概念和考试重点：
+
+背景知识：
+{context_str}
+
+对话历史：
+{history_str}
+
+问题：{question}
+
+请按照以下步骤回答：
+1. 分析问题：明确问题的核心知识点和考察方向
+2. 知识回顾：回顾相关的教材知识点
+3. 推理过程：逐步推导答案
+4. 最终答案：给出清晰、准确的结论
+5. 考点分析：指出该问题涉及的考试重点和容易出错的地方
+6. 知识溯源：对关键知识点标注来源，格式为[来源: 教材名称]
+
+请确保回答结构清晰、逻辑严谨，符合考研教材的标准表述。
+"""
         print(f"LLM Input: {prompt}")
 
         messages = [
