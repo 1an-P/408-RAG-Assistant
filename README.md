@@ -69,7 +69,7 @@ flowchart LR
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/<your-name>/408-RAG.git
+git clone https://github.com/1an-P/-RAG-408-.git
 cd 408-RAG
 ```
 
