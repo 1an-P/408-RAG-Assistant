@@ -60,19 +60,48 @@ class LLMClient:
                 compressed_context.append(compressed_info)
         return compressed_context
 
-    def generate_answer(self, question, context, history=[]):
+    def generate_answer(self, question, context, history=[], use_knowledge=True, test_mode=False):
         """
         Generates an answer using the LLM based on the provided question and context.
+        
+        Args:
+            question: 用户问题
+            context: 知识库上下文
+            history: 对话历史
+            use_knowledge: 是否使用知识库信息
+            test_mode: 是否为测试模式，测试模式下只输出答案
         """
         # 压缩上下文，提取关键信息
-        compressed_context = self.compress_context(context, question)
+        compressed_context = self.compress_context(context, question) if use_knowledge else []
         
         # 准备上下文
-        context_str = "\n\n".join(compressed_context) if compressed_context else "\n\n".join(context)
+        context_str = "\n\n".join(compressed_context) if compressed_context else "\n\n".join(context) if use_knowledge else "无"
         history_str = "\n".join([f"用户: {h[0]}\n助手: {h[1]}" for h in history]) if history else "无"
         
-        # 使用CoT提示词模板
-        prompt = f"""请根据以下提供的408考研相关知识回答问题，参考教材表述，突出核心概念和考试重点：
+        # 检查知识库信息是否充足
+        knowledge_available = bool(context_str.strip() and context_str != "无")
+        
+        # 构建提示词
+        if knowledge_available and use_knowledge:
+            if test_mode:
+                # 测试模式：只输出答案
+                prompt = f"""请根据以下提供的408考研相关知识回答问题：
+
+背景知识：
+{context_str}
+
+问题：{question}
+
+重要要求：
+- 结合背景知识和你的知识回答
+- 如果背景知识与你的知识冲突，以背景知识为准
+- 只输出正确答案的选项字母，不要输出任何其他内容
+- 例如：A
+"""
+                system_message = "你是一个408考研智能辅导助手，精通数据结构、计算机组成原理、操作系统和计算机网络四大科目。请根据提供的背景知识和你的知识回答问题，只输出正确答案的选项字母。"
+            else:
+                # 正常模式：输出完整回答
+                prompt = f"""请根据以下提供的408考研相关知识回答问题，参考教材表述，突出核心概念和考试重点：
 
 背景知识：
 {context_str}
@@ -90,14 +119,53 @@ class LLMClient:
 5. 考点分析：指出该问题涉及的考试重点和容易出错的地方
 6. 知识溯源：对关键知识点标注来源，格式为[来源: 教材名称]
 
-请确保回答结构清晰、逻辑严谨，符合考研教材的标准表述。
+重要要求：
+- 结合背景知识和你的知识回答
+- 如果背景知识与你的知识冲突，以背景知识为准
+- 保持回答结构清晰、逻辑严谨，符合考研教材的标准表述
 """
+                system_message = "你是一个408考研智能辅导助手，精通数据结构、计算机组成原理、操作系统和计算机网络四大科目。请根据提供的背景知识和你的知识回答问题，突出核心概念和考试重点，解释清晰准确，避免使用过于前沿的技术术语，保持与教材内容一致。如果背景知识与你的知识冲突，以背景知识为准。"
+        else:
+            if test_mode:
+                # 测试模式：只输出答案
+                prompt = f"""请回答以下408考研相关问题：
+
+问题：{question}
+
+重要要求：
+- 只输出正确答案的选项字母，不要输出任何其他内容
+- 例如：A
+"""
+                system_message = "你是一个408考研智能辅导助手，精通数据结构、计算机组成原理、操作系统和计算机网络四大科目。请回答问题，只输出正确答案的选项字母。"
+            else:
+                # 正常模式：输出完整回答
+                prompt = f"""请回答以下408考研相关问题，参考教材表述，突出核心概念和考试重点：
+
+对话历史：
+{history_str}
+
+问题：{question}
+
+请按照以下步骤回答：
+1. 分析问题：明确问题的核心知识点和考察方向
+2. 知识回顾：回顾相关的教材知识点
+3. 推理过程：逐步推导答案
+4. 最终答案：给出清晰、准确的结论
+5. 考点分析：指出该问题涉及的考试重点和容易出错的地方
+6. 知识溯源：对关键知识点标注来源，格式为[来源: 教材名称]
+
+重要要求：
+- 确保答案的准确性和权威性
+- 保持回答结构清晰、逻辑严谨，符合考研教材的标准表述
+"""
+                system_message = "你是一个408考研智能辅导助手，精通数据结构、计算机组成原理、操作系统和计算机网络四大科目。请以考研教材的标准表述回答问题，突出核心概念和考试重点，解释清晰准确，避免使用过于前沿的技术术语，保持与教材内容一致。确保答案的准确性和权威性。"
+        
         print(f"LLM Input: {prompt}")
 
         messages = [
             {
                 "role": "system",
-                "content": "你是一个408考研智能辅导助手，精通数据结构、计算机组成原理、操作系统和计算机网络四大科目。请根据提供的背景知识和对话历史，以考研教材的标准表述回答问题，突出核心概念和考试重点，解释清晰准确，避免使用过于前沿的技术术语，保持与教材内容一致。",
+                "content": system_message,
             },
             {"role": "user", "content": prompt},
         ]
@@ -105,7 +173,7 @@ class LLMClient:
         response = self.client.chat.completions.create(
             model=self.model_name,
             messages=messages,
-            temperature=0.7,
+            temperature=0.3,  # 降低温度，提高准确性
         )
         return response.choices[0].message.content
 

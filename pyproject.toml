@@ -1,0 +1,26 @@
+[project]
+name = "408-rag"
+version = "0.1.0"
+description = "408 RAG project with local knowledge base retrieval"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "langchain",
+    "langchain-community",
+    "langchain-text-splitters",
+    "chromadb",
+    "pymilvus",
+    "openai",
+    "python-dotenv",
+    "tqdm",
+    "PyMuPDF",
+    "unstructured",
+    "pytesseract",
+    "Pillow",
+    "pdfplumber",
+    "rank-bm25",
+    "nltk",
+]
+
+[tool.uv]
+package = false

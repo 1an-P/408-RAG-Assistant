@@ -1,9 +1,15 @@
 langchain
 langchain-community
 langchain-text-splitters
+chromadb
 pymilvus
 openai
 python-dotenv
 tqdm
 PyMuPDF
 unstructured
+pytesseract
+Pillow
+pdfplumber
+rank-bm25
+nltk

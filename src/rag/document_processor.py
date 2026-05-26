@@ -5,6 +5,7 @@ from langchain_community.document_loaders import (
 )
 from langchain_text_splitters import RecursiveCharacterTextSplitter, TextSplitter
 from typing import List, Dict, Any
+from src.rag.ocr_processor import OCRProcessor
 
 
 class Document:
@@ -95,9 +96,18 @@ class ChapterTitleSplitter(TextSplitter):
 
 
 class DocumentProcessor:
-    def __init__(self, chunk_size=500, chunk_overlap=50, strategy="default"):
+    def __init__(
+        self,
+        chunk_size=500,
+        chunk_overlap=50,
+        strategy="default",
+        use_ocr=True,
+        use_table_extraction=True,
+    ):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.use_ocr = use_ocr
+        self.use_table_extraction = use_table_extraction
 
         if strategy == "paper":
             self.text_splitter = PaperTextSplitter(
@@ -116,12 +126,18 @@ class DocumentProcessor:
             "pdf": PyMuPDFLoader,
             "md": UnstructuredMarkdownLoader,
         }
+        
+        # 初始化OCR处理器
+        if self.use_ocr or self.use_table_extraction:
+            self.ocr_processor = OCRProcessor(enable_ocr=self.use_ocr)
+        else:
+            self.ocr_processor = None
 
     def load_documents(self, file_paths):
         """加载多种格式的文档"""
         documents = []
         for file_path in file_paths:
-            file_extension = file_path.split(".")[-1]
+            file_extension = file_path.split(".")[-1].lower()
             loader_class = self.loaders.get(file_extension)
             if loader_class:
                 loader = loader_class(file_path)
@@ -145,16 +161,73 @@ class DocumentProcessor:
         text = text.replace("•", "").replace(" ", "").replace("\n\n", "\n")
         return text
 
+    def _build_pdf_multimodal_documents(self, pdf_path):
+        if not self.ocr_processor:
+            return []
+
+        extra_docs = []
+
+        if self.use_table_extraction:
+            for table in self.ocr_processor.extract_tables_from_pdf(pdf_path):
+                content = (
+                    "--- PDF table ---\n"
+                    f"Source: {pdf_path}\n"
+                    f"Page: {table['page']}\n"
+                    f"Table: {table['index']}\n\n"
+                    f"{table['text']}"
+                )
+                extra_docs.append(
+                    Document(
+                        page_content=content,
+                        metadata={
+                            "source": pdf_path,
+                            "page": table["page"] - 1,
+                            "content_type": "table",
+                            "table_index": table["index"],
+                            "extraction_method": "pdfplumber",
+                        },
+                    )
+                )
+
+        if self.use_ocr:
+            for result in self.ocr_processor.process_pdf_with_ocr(pdf_path):
+                content = (
+                    "--- Image OCR ---\n"
+                    f"Source: {pdf_path}\n"
+                    f"Page: {result['page']}\n"
+                    f"Image: {result['index']}\n\n"
+                    f"{result['text']}"
+                )
+                extra_docs.append(
+                    Document(
+                        page_content=content,
+                        metadata={
+                            "source": pdf_path,
+                            "page": result["page"] - 1,
+                            "content_type": "image_ocr",
+                            "image_index": result["index"],
+                            "extraction_method": "tesseract",
+                        },
+                    )
+                )
+
+        return extra_docs
+
     def process_documents(self, file_paths):
         """完整文档处理流程"""
         # 1. 加载文档
         docs = self.load_documents(file_paths)
 
-        # 2. 清洗文档内容
+        processed_docs = []
+        pdf_sources = set()
         for doc in docs:
             doc.page_content = self.clean_text(doc.page_content)
+            source_path = doc.metadata.get("source")
+            if source_path and source_path.lower().endswith(".pdf"):
+                pdf_sources.add(source_path)
+            processed_docs.append(doc)
 
-        # 3. 分割文档
-        split_docs = self.text_splitter.split_documents(docs)
+        for pdf_path in sorted(pdf_sources):
+            processed_docs.extend(self._build_pdf_multimodal_documents(pdf_path))
 
-        return split_docs
+        return self.text_splitter.split_documents(processed_docs)

@@ -1,10 +1,10 @@
 import os
 import logging
 from dotenv import load_dotenv, find_dotenv
-from document_processor import DocumentProcessor
-from vector_db import VectorDatabase
-from llm_apis import LLMClient
-from reranker import SimpleReranker
+from src.rag.document_processor import DocumentProcessor
+from src.rag.vector_db import VectorDatabase
+from src.rag.llm_apis import LLMClient
+from src.rag.reranker import SimpleReranker
 
 # 配置日志记录
 logging.basicConfig(
@@ -16,9 +16,21 @@ load_dotenv(find_dotenv())
 
 
 class RAGSystem:
-    def __init__(self, persist_dir, strategy="default"):
+    def __init__(
+        self,
+        persist_dir,
+        strategy="default",
+        alpha=0.5,
+        use_ocr=True,
+        use_table_extraction=True,
+    ):
         self.strategy = strategy
-        self.document_processor = DocumentProcessor(strategy=self.strategy)
+        self.alpha = alpha  # 设置默认的alpha值
+        self.document_processor = DocumentProcessor(
+            strategy=self.strategy,
+            use_ocr=use_ocr,
+            use_table_extraction=use_table_extraction,
+        )
         self.vector_db = VectorDatabase(persist_directory=persist_dir)
         self.llm_client = LLMClient()
         self.reranker = SimpleReranker(embedding_model=self.vector_db.embedding)
@@ -89,13 +101,23 @@ class RAGSystem:
             f"知识库构建完成，包含 {self.vector_db.get_collection_count()} 个文档块"
         )
 
-    def query(self, question, k=3, use_mmr=True):
+    def query(self, question, k=3, use_mmr=False, use_hybrid=True, alpha=None, fallback_to_llm=True, test_mode=False):
         """查询知识库并生成答案"""
         if not os.path.exists(self.persist_dir):
-            raise ValueError("知识库不存在，请先构建知识库")
+            # 知识库不存在，直接调用大模型
+            logging.warning("知识库不存在，直接调用大模型回答")
+            history = self.llm_client.get_history()
+            rewritten_question = self.llm_client.rewrite_question(question, history)
+            answer = self.llm_client.generate_answer(rewritten_question, [], history, use_knowledge=False, test_mode=test_mode)
+            self.llm_client.add_to_history(question, answer)
+            return answer
 
         if not self.vector_db.vectordb:
             self.vector_db.load_existing(self.persist_dir)
+
+        # 如果没有提供alpha，使用实例的默认值
+        if alpha is None:
+            alpha = self.alpha
 
         # 重写问题，结合对话历史
         history = self.llm_client.get_history()
@@ -104,10 +126,15 @@ class RAGSystem:
         logging.info(f"重写问题: {rewritten_question}")
 
         # 检索相关文档
-        if use_mmr:
-            retrieved_docs = self.vector_db.mmr_search(rewritten_question, k=k*2)  # 检索更多文档用于重排序
+        if use_hybrid:
+            # 使用混合检索
+            retrieved_docs = self.vector_db.hybrid_search(rewritten_question, k=k*2, alpha=alpha)
+        elif use_mmr:
+            # 使用MMR检索
+            retrieved_docs = self.vector_db.mmr_search(rewritten_question, k=k*2)
         else:
-            retrieved_docs = self.vector_db.similarity_search(rewritten_question, k=k*2)  # 检索更多文档用于重排序
+            # 使用传统相似度检索
+            retrieved_docs = self.vector_db.similarity_search(rewritten_question, k=k*2)
         
         # 对检索到的文档进行重排序
         reranked_docs = self.reranker.rerank(rewritten_question, retrieved_docs, top_k=k)
@@ -116,8 +143,18 @@ class RAGSystem:
 
         logging.info(f"找到 {len(retrieved_docs)} 个相关文档块，重排序后保留 {len(reranked_docs)} 个.")
 
+        # 检查知识库信息是否充足
+        knowledge_available = bool(context and any(doc.strip() for doc in context))
+        
         # 生成答案
-        answer = self.llm_client.generate_answer(rewritten_question, context, history)
+        if knowledge_available or not fallback_to_llm:
+            # 使用知识库信息生成答案
+            answer = self.llm_client.generate_answer(rewritten_question, context, history, use_knowledge=True, test_mode=test_mode)
+        else:
+            # 知识库信息不足，直接调用大模型
+            logging.warning("知识库信息不足，直接调用大模型回答")
+            answer = self.llm_client.generate_answer(rewritten_question, [], history, use_knowledge=False, test_mode=test_mode)
+        
         logging.info(f"生成的答案: {answer}")
 
         # 添加到对话历史
@@ -125,11 +162,15 @@ class RAGSystem:
 
         return answer
 
-    def multi_turn_query(self, questions):
+    def multi_turn_query(self, questions, alpha=None, fallback_to_llm=True, test_mode=False):
         """多轮对话查询"""
+        # 如果没有提供alpha，使用实例的默认值
+        if alpha is None:
+            alpha = self.alpha
+
         answers = []
         for question in questions:
-            answer = self.query(question)
+            answer = self.query(question, alpha=alpha, fallback_to_llm=fallback_to_llm, test_mode=test_mode)
             answers.append(answer)
             print(f"用户: {question}")
             print(f"助手: {answer}")
